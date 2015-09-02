@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/modernizr/2.8.3/modernizr.min.js"></script>
+		<script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.0.0-alpha1/jquery.min.js"></script>
+		<script>
+			function tablet_problem() {
+				var per_half_tablet = (Math.floor(Math.random() * 6) + 1) * 5;
+				var number_of_half_tablets = (Math.floor(Math.random() * 6) + 1);
+				var per_tablet = per_half_tablet * 2;
+				var dosage = per_half_tablet * number_of_half_tablets;
+				var can_be_grains = dosage % 15 == 0;
+				var is_grains = can_be_grains ? Math.random() < 0.5 : false;
+				var correct_answer = number_of_half_tablets / 2;
+				var grains_value = dosage / 60;
+				var dosage_string = is_grains ? (String(grains_value) + ' gr') : (String(dosage) + ' mg');
+				var question = "Required dose: " + dosage_string + "; Tablet size: " + per_tablet + " mg. How many tablets are needed?";
+				var unit = '';
+				return [question, correct_answer, unit];
+			}
+
+			function injection_problem() {
+				var portions_per_ml = (Math.floor(Math.random() * 4) + 1);
+				if (portions_per_ml >= 3) {portions_per_ml++;} // I only want 1, 2, 4, and 5.
+				var per_portion = (Math.floor(Math.random() * 6) + 1) * 5;
+				var per_ml = per_portion * portions_per_ml;
+				var portion_count = (Math.floor(Math.random() * 10) + 1);
+				var portion_mg = per_portion * portion_count;
+				var correct_answer = portion_count / portions_per_ml;
+				var question = "Required dose: " + portion_mg + " mg; Concentration: " + per_ml + " mg/mL. How much should be injected?";
+				var unit = "mL";
+				return [question, correct_answer, unit];
+			}
+
+			function intravenous_problem() {
+				var iv_portion_pairings = [
+					[1, 1],
+					[1, 2],
+					[1, 3],
+					[2, 3],
+					[1, 4],
+					[3, 4],
+					[1, 6],
+					[5, 6]
+				]
+				var portion_pairing = iv_portion_pairings[Math.floor(Math.random() * iv_portion_pairings.length)];
+				var portions_per_hour = portion_pairing[1];
+				var portion_ml = (Math.floor(Math.random() * 4) + 1) * 50;
+				var portions_required = portion_pairing[0];
+				var ml_required = portion_ml * portions_required;
+				var ml_per_hour = portion_ml * portions_per_hour;
+				var minutes = 60 / portions_per_hour * portions_required;
+				var question = "Required dose: " + ml_required + " mL; time: " + minutes + " minutes. What flow rate should be used?";
+				var unit = "mL/hour";
+				return [question, ml_per_hour, unit];
+			}
+
+			function weight_problem() {
+				var weight_part = (Math.floor(Math.random() * 11) + 5)
+				var use_lbs = (Math.random() < 0.5);
+				if (use_lbs) {
+					var weight = weight_part * 22;
+					var weight_unit = 'lbs';
+				} else {
+					var weight = weight_part * 10;
+					var weight_unit = 'kg';
+				}
+				var units_per_kg = (Math.floor(Math.random() * 10) + 1) * 10;
+				var correct_answer = units_per_kg * weight_part * 10;
+				var question = "Required dose: " + units_per_kg + " units/kg; Patient weight: " + weight + " " + weight_unit + ". How much should be given?";
+				var unit = "units";
+				return [question, correct_answer, unit];
+			}
+
+			var problem_types = [
+				tablet_problem,
+				injection_problem,
+				intravenous_problem,
+				weight_problem
+			];
+
+			function createProblem() {
+				var problem_type = problem_types[Math.floor(Math.random() * problem_types.length)];
+				var problem = problem_type();
+				var question = problem[0];
+				var correct_answer = problem[1];
+				var unit = problem[2];
+				$('body').append($('<form><p>' + question + ' <input type="text" correct-answer="' + correct_answer + '"> ' + unit + ' <span></span></p></form>'));
+			}
+
+			function answerProblem(ev) {
+				ev.preventDefault();
+				var input = $('input', $(ev.target));
+				var result_point = $('span', $(ev.target));
+				if (Number(input.attr('correct-answer')) == Number(input.val())) {
+					result_point.html('Right!');
+					result_point.addClass('right');
+				} else {
+					result_point.html('Wrong! ' + input.attr('correct-answer'));
+					result_point.addClass('wrong');
+				}
+				input.prop('disabled', true);
+				createProblem();
+			}
+
+			$(document).on('submit', 'form, input', answerProblem);
+
+			$(createProblem);
+		</script>
+		<style>
+			.right {
+				font-weight: bold;
+				color: green;
+			}
+
+			.wrong {
+				font-weight: bold;
+				color: red;
+			}
+		<body>
+		</body>
+	</head>
