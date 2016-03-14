@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/modernizr/2.8.3/modernizr.min.js"></script>
+		<script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/jquery/2.2.1/jquery.min.js"></script>
+		<script type="text/javascript">
+
+			var MAXIMUM_SIZE = 32768;
+
+			function get_fill_commands(orig_x_lo, orig_y_lo, orig_z_lo, orig_x_hi, orig_y_hi, orig_z_hi, new_x_lo, new_y_lo, new_z_lo, new_x_hi, new_y_hi, new_z_hi) {
+				var partitions = cube_hole(orig_x_lo, orig_y_lo, orig_z_lo, orig_x_hi, orig_y_hi, orig_z_hi, new_x_lo, new_y_lo, new_z_lo, new_x_hi, new_y_hi, new_z_hi);
+				var results = [];
+				for (var k = 0; k < partitions.length; k++) {
+					results = results.concat(fill_cube.apply(null, partitions[k]));
+				}
+				return results;
+			}
+
+			function cube_hole(orig_x_lo, orig_y_lo, orig_z_lo, orig_x_hi, orig_y_hi, orig_z_hi, new_x_lo, new_y_lo, new_z_lo, new_x_hi, new_y_hi, new_z_hi) {
+				// step 1: fix coordinate orders
+				if (orig_x_lo > orig_x_hi) {
+					var swap = orig_x_lo;
+					orig_x_lo = orig_x_hi;
+					orig_x_hi = swap;
+				}
+				if (orig_y_lo > orig_y_hi) {
+					var swap = orig_y_lo;
+					orig_y_lo = orig_y_hi;
+					orig_y_hi = swap;
+				}
+				if (orig_z_lo > orig_z_hi) {
+					var swap = orig_z_lo;
+					orig_z_lo = orig_z_hi;
+					orig_z_hi = swap;
+				}
+				if (new_x_lo > new_x_hi) {
+					var swap = new_x_lo;
+					new_x_lo = new_x_hi;
+					new_x_hi = swap;
+				}
+				if (new_y_lo > new_y_hi) {
+					var swap = new_y_lo;
+					new_y_lo = new_y_hi;
+					new_y_hi = swap;
+				}
+				if (new_z_lo > new_z_hi) {
+					var swap = new_z_lo;
+					new_z_lo = new_z_hi;
+					new_z_hi = swap;
+				}
+
+				// step 2: trim the original so it fits entirely within the new, so we don't do anything silly.
+				orig_x_lo = Math.max(orig_x_lo, new_x_lo);
+				orig_y_lo = Math.max(orig_y_lo, new_y_lo);
+				orig_z_lo = Math.max(orig_z_lo, new_z_lo);
+				orig_x_hi = Math.min(orig_x_hi, new_x_hi);
+				orig_y_hi = Math.min(orig_y_hi, new_y_hi);
+				orig_z_hi = Math.min(orig_z_hi, new_z_hi);
+
+				// step 3: if the old cube isn't within the new cube, just partition the new cube.
+				if (orig_x_hi < new_x_lo || new_x_hi < orig_x_lo || orig_y_hi < new_y_lo || new_y_hi < orig_y_lo || orig_z_hi < new_z_lo || new_z_hi < orig_z_lo) {
+					return [[new_x_lo, new_y_lo, new_z_lo, new_x_hi, new_y_hi, new_z_hi]];
+				}
+
+				// step 4: figure out the partitions
+				var partitions = [];
+
+				if (new_x_lo < orig_x_lo) {
+					partitions.push([new_x_lo, new_y_lo, new_z_lo, orig_x_lo - 1, new_y_hi, new_z_hi]);
+				}
+
+				if (orig_x_hi < new_x_hi) {
+					partitions.push([orig_x_hi + 1, new_y_lo, new_z_lo, new_x_hi, new_y_hi, new_z_hi]);
+				}
+
+				if (new_y_lo < orig_y_lo) {
+					partitions.push([orig_x_lo, new_y_lo, new_z_lo, orig_x_hi, orig_y_lo - 1, new_z_hi]);
+				}
+
+				if (orig_y_hi < new_y_hi) {
+					partitions.push([orig_x_lo, orig_y_hi + 1, new_z_lo, orig_x_hi, new_y_hi, new_z_hi]);
+				}
+
+				if (new_z_lo < orig_z_lo) {
+					partitions.push([orig_x_lo, orig_y_lo, new_z_lo, orig_x_hi, orig_y_lo, orig_z_lo - 1]);
+				}
+
+				if (orig_z_hi < new_z_hi) {
+					partitions.push([orig_x_lo, orig_y_lo, orig_z_hi + 1, orig_x_hi, orig_y_hi, new_z_hi]);
+				}
+
+				return partitions;
+
+			}
+
+			function fill_cube(x_lo, y_lo, z_lo, x_hi, y_hi, z_hi) {
+				var x_size = x_hi - x_lo + 1;
+				var y_size = y_hi - y_lo + 1;
+				var z_size = z_hi - z_lo + 1;
+				var optimization = optimize_cubes(x_size, y_size, z_size);
+				var x_values = [];
+				for (var x = x_lo; x <= x_hi; x += optimization.size[0]) {
+					x_values.push([x, Math.min(x + optimization.size[0] - 1, x_hi)]);
+				}
+				var y_values = [];
+				for (var y = y_lo; y <= y_hi; y += optimization.size[1]) {
+					y_values.push([y, Math.min(y + optimization.size[1] - 1, y_hi)]);
+				}
+				var z_values = [];
+				for (var z = z_lo; z <= z_hi; z += optimization.size[2]) {
+					z_values.push([z, Math.min(z + optimization.size[2] - 1, z_hi)]);
+				}
+
+				var cubes = [];
+				for (var xk = 0; xk < x_values.length; xk++) {
+					var x_step = x_values[xk];
+					for (var yk = 0; yk < y_values.length; yk++) {
+						var y_step = y_values[yk];
+						for (var zk = 0; zk < z_values.length; zk++) {
+							var z_step = z_values[zk];
+							cubes.push([x_step[0], y_step[0], z_step[0], x_step[1], y_step[1], z_step[1]]);
+						}
+					}
+				}
+				return cubes;
+			}
+
+			function optimize_cubes(x, y, z) {
+				var x_sizes = cube_lengths(x);
+				var y_sizes = cube_lengths(y);
+				var z_sizes = cube_lengths(z);
+				var count = x*y*z;
+				var sizes = [1,1,1];
+				for (var xk = 0; xk < x_sizes.length; xk++) {
+					var x_size = x_sizes[xk].size;
+					var x_count = x_sizes[xk].count; 
+					for (var yk = 0; yk < y_sizes.length; yk++) {
+						var y_size = y_sizes[yk].size;
+						var y_count = y_sizes[yk].count; 
+						for (var zk = 0; zk < z_sizes.length; zk++) {
+							var z_size = z_sizes[zk].size;
+							var z_count = z_sizes[zk].count; 
+							block_size = x_size * y_size * z_size;
+							block_count = x_count * y_count * z_count;
+							if (block_size <= MAXIMUM_SIZE && block_count < count) {
+								count = block_count;
+								sizes = [x_size, y_size, z_size];
+							}
+						}
+					}
+				}
+				return {'count': count, 'size': sizes};
+			}
+
+			function cube_lengths(x) {
+				var lengths = [];
+				for (var k = 1; k <= Math.sqrt(x); k++) {
+					if (k * k == x) {
+						lengths.push({'size': k, 'count': k});
+					} else {
+						lengths.push({'size': k, 'count': Math.ceil(x / k)});
+						lengths.push({'size': Math.ceil(x / k), 'count': k});
+					}
+				}
+				return lengths;
+			}
+
+			function run_cubing() {
+				var orig_x_lo = Number($('#orig_x_lo').val());
+				var orig_y_lo = Number($('#orig_y_lo').val());
+				var orig_z_lo = Number($('#orig_z_lo').val());
+				var orig_x_hi = Number($('#orig_x_hi').val());
+				var orig_y_hi = Number($('#orig_y_hi').val());
+				var orig_z_hi = Number($('#orig_z_hi').val());
+				var new_x_lo = Number($('#new_x_lo').val());
+				var new_y_lo = Number($('#new_y_lo').val());
+				var new_z_lo = Number($('#new_z_lo').val());
+				var new_x_hi = Number($('#new_x_hi').val());
+				var new_y_hi = Number($('#new_y_hi').val());
+				var new_z_hi = Number($('#new_z_hi').val());
+				var data = $('#data').val();
+				var cubes = get_fill_commands(orig_x_lo, orig_y_lo, orig_z_lo, orig_x_hi, orig_y_hi, orig_z_hi, new_x_lo, new_y_lo, new_z_lo, new_x_hi, new_y_hi, new_z_hi);
+				var result_spot = $('#results');
+				result_spot.empty();
+				for (var k = 0; k < cubes.length; k++) {
+					cube = cubes[k];
+					result_spot.append($('<p>/fill ' + cube[0] + ' ' + cube[1] + ' ' + cube[2] + ' ' + cube[3] + ' ' + cube[4] + ' ' + cube[5] + ' ' + data + '</p>'));
+				}
+			}
+
+			$(document).ready(function() {
+				$('#go').on('click', run_cubing);
+			});
+
+		</script>
+		<style type="text/css">
+
+		</style>
+	</head>
+	<body>
+		<table>
+			<tr><th></th><th>x</th><th>y</th><th>z</th></tr>
+			<tr>
+				<th scope="row">old low</th>
+				<td><input type="number" id="orig_x_lo" name="orig_x_lo"></td>
+				<td><input type="number" id="orig_y_lo" name="orig_y_lo"></td>
+				<td><input type="number" id="orig_z_lo" name="orig_z_lo"></td>
+			</tr>
+			<tr>
+				<th scope="row">old high</th>
+				<td><input type="number" id="orig_x_hi" name="orig_x_hi"></td>
+				<td><input type="number" id="orig_y_hi" name="orig_y_hi"></td>
+				<td><input type="number" id="orig_z_hi" name="orig_z_hi"></td>
+			</tr>
+			<tr>
+				<th scope="row">new low</th>
+				<td><input type="number" id="new_x_lo" name="new_x_lo"></td>
+				<td><input type="number" id="new_y_lo" name="new_y_lo"></td>
+				<td><input type="number" id="new_z_lo" name="new_z_lo"></td>
+			</tr>
+			<tr>
+				<th scope="row">new high</th>
+				<td><input type="number" id="new_x_hi" name="new_x_hi"></td>
+				<td><input type="number" id="new_y_hi" name="new_y_hi"></td>
+				<td><input type="number" id="new_z_hi" name="new_z_hi"></td>
+			</tr>
+		</table>
+		<p>Data <input type="text" id="data"></p>
+		<p><button type="button" id="go">Go</button></p>
+		<div id="results"></div>
+	</body>
+</html>
