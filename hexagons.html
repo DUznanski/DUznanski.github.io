@@ -17,16 +17,16 @@
 
 			.hexagon-grid .cell {
 				display: block;
-				height: 56px;
+				height: 56px; /* 7/8 ~= sqrt(3)/2 */
 				position: relative;
 				background: url('hexagon.png') no-repeat;
 			}
 
 			.hexagon-grid .cell .center {
 				position: absolute;
-				top: 50%;
+				top: 50%; 
 				left: 50%;
-				transform: translate(-50%, -50%);
+				transform: translate(-50%, -50%); /* without sizing information, we have to apply a transform to place things correctly. */
 			}
 
 		</style>

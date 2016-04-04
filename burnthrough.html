@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/2.2.2/jquery.min.js"></script>
+		<script>
+
+			function analyze_burnthrough(hit, dice, limit) {
+				var roll_to_hit = [];
+				for (var k = 1; k <= 6; k++) {
+					if (k < hit) {
+						roll_to_hit.push('miss');
+					} else if (k >= hit + 2) {
+						roll_to_hit.push('crit');
+					} else {
+						roll_to_hit.push('hit');
+					}
+				}
+				var initial_hit_string = 'h'.repeat(dice) + ',,0,0'
+				var new_hit_counts = {};
+				new_hit_counts[initial_hit_string] = 1;
+				var old_hit_counts = {};
+				var has_hits = true;
+				while (has_hits) {
+					has_hits = false;
+					old_hit_counts = new_hit_counts;
+					new_hit_counts = {};
+					for (var hit_count in old_hit_counts) {
+						var freq = old_hit_counts[hit_count]
+						for (var roll = 0; roll < roll_to_hit.length; roll++) {
+							var roll_result = burnthrough_roll(hit_count, roll_to_hit[roll], limit);
+							if (new_hit_counts[roll_result]) {
+								new_hit_counts[roll_result] += freq; 
+							} else {
+								new_hit_counts[roll_result] = freq;
+							}
+							if (hit_count != roll_result) {
+								has_hits = true;
+							}
+						}
+					}
+				}
+				result = {};
+				for (var hit_count in old_hit_counts) {
+					// cut off those extra commas.
+					result[hit_count.slice(2)] = old_hit_counts[hit_count];
+				}
+				return result;
+			}
+
+
+			function burnthrough_roll(hit_count, roll, limit) {
+				// disassemble the hit count.
+				var split_hits = hit_count.split(',');
+				var die_states = split_hits[0];
+				var spent_states = split_hits[1];
+				var hits = Number(split_hits[2]);
+				var crits = Number(split_hits[3]);
+				// do we have dice?
+				if (die_states.length) {
+					var curr_die_state = die_states[0];
+					var new_die_states = die_states.slice(1);
+					if (roll == 'hit') {
+						var new_spent_states = spent_states + curr_die_state;
+						if (curr_die_state == 'c') {
+							// previous crits remain crits
+							crits += 1;
+						} else {
+							hits += 1;
+						}
+					} else if (roll == 'crit') {
+						var new_spent_states = spent_states + 'c';
+						crits += 1;
+					} else if (roll == 'miss') {
+						var new_spent_states = spent_states;
+					}
+					// are we out of rolls in this cycle?
+					if (!new_die_states) {
+						var spent_states_array = new_spent_states.split('');
+						spent_states_array.sort();
+						sorted_states = spent_states_array.join('');
+						new_die_states = sorted_states;
+						new_spent_states = '';
+					}
+					// have we done maximum damage?
+					if (hits + crits == limit) {
+						new_die_states = '';
+						new_spent_states = '';
+					}
+					return [new_die_states, new_spent_states, hits, crits].join(',');
+				} else {
+					return hit_count;
+				}
+			}
+
+			function a_to_o(a) {
+				var o = {}
+				for (var k = 0; k < a.length; k++) {
+					var e = a[k];
+					o[e.name] = e.value;
+				}
+				return o;
+			}
+
+			function launch() {
+				var fields = a_to_o($('#form').serializeArray());
+				var hit = Number(fields['hit']);
+				var dice = Number(fields['dice']);
+				var limit = Number(fields['limit']);
+				var results = analyze_burnthrough(hit, dice, limit); 
+				// build a pile of arrays of the right size
+				var result_table = [];
+				for (var k = 0; k <= limit; k++) {
+					var row = Array(limit + 1);
+					result_table.push(row);
+				}
+				for (var result_value in results) {
+					var freq = results[result_value];
+					var hc = result_value.split(',');
+					var total_hits = Number(hc[0]) + Number(hc[1]);
+					var crits = Number(hc[1]);
+					result_table[total_hits][crits] = freq;
+				}
+
+				var grid = $('<table>');
+				var top_row = $('<tr>');
+				grid.append(top_row);
+				top_row.append($('<th class="corner"><div class="colhead">hits+crits</div><div class="rowhead">crits</div></th>'));
+				for (var k = 0; k <= limit; k++) {
+					top_row.append($('<th scope="col">' + k + '</th>'));
+				}
+				for (var k = 0; k < result_table.length; k++) {
+					var row = $('<tr><th scope="row">' + k + '</th></tr>');
+					var payload = result_table[k];
+					for (var j = 0; j < payload.length; j++) {
+						var freq = payload[j];
+						if (!freq) {freq = '--';} 
+						row.append($('<td>' + freq + '</td>'));					
+					}
+					grid.append(row);
+				}
+				$('#results').empty().append(grid);
+			}
+
+			$(function() {
+				$('#launch').on('click', launch);
+			});
+
+		</script>
+		<style>
+			label {
+				display: block;
+			}
+
+			td {
+				text-align: right;
+				border: 1px solid #ccc;
+			}
+
+			.corner {
+				position: relative;
+				height: 4rem;
+				width: 5rem;
+				border-right: 1px solid black;
+				border-bottom: 1px solid black;
+			}
+
+			.colhead {
+				position: absolute;
+				bottom: 0;
+				left: 50%;
+				text-align: center;
+				padding: 0.25rem;
+				transform: translate(-50%, 0);
+			}
+
+			.rowhead {
+				position: absolute;
+				top: 50%;
+				right: 0;
+				padding: 0.25rem;
+				transform: translate(0, -50%);
+			}
+
+			table {
+				border-collapse: collapse;
+			}
+
+			th[scope="row"] {
+				border-right: 1px solid black;
+			}
+
+			th[scope="col"] {
+				border-bottom: 1px solid black;
+			}
+		</style>
+	</head>
+	<body>
+		<h1>Burnthrough</h1>
+		<form id="form">
+			<label><input type="number" id="hit" name="hit" value=3 min=2 max=6> Value to hit</label>
+			<label><input type="number" id="dice" name="dice" value=2 min=1 max=4> Number of dice</label>
+			<label><input type="number" id="limit" name="limit" value=6 min=4 max=10> Damage limit</label>
+			<button type="button" id="launch">Launch</button>
+		</form>
+		<div id="results"></div>
+	</body>
+</html>
