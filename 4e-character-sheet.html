@@ -1,0 +1,1642 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>4e Character Sheet!</title>
+    <script  src="https://ajax.googleapis.com/ajax/libs/jquery/1.7.2/jquery.min.js"></script>
+  </head>
+  <body>
+    <p>Race: <select id="race_dropdown" name="race"></select></p>
+    <p>Class: <select id="class_dropdown" name="class"></select></p>
+    <p>Ability Scores: <select id="ability_dropdown" name="ability_loadout"></select></p>
+    <p>Starter Kits: <span id="kits_zone"></span></p>
+    <table id="ability_grid"></table>
+    <div id="skill_dropdowns"></div>
+    <table id="skills_grid"></table>
+    <script type="text/javascript">
+    
+function Character() {
+  this.class_ = "";
+  this.race = "";
+  this.ability_permutation = {};
+  this.ability_loadout = [];
+  this.ability_scores = {};
+  this.ability_bonuses = {};
+  this.naked_defenses = {};
+  this.skill_selections = [];
+  this.skill_worksheets = {};
+  this.skill_bonuses = {};
+}
+
+/* Change the race.  Changing the race can change ability scores and skill selections.
+ * new_race: the name of the new race (a string).
+ */
+Character.prototype.select_race = function(new_race) {
+  this.race = new_race;
+  if (new_race == "Human" && !this.human_ability_selection) {
+    this.human_ability_selection = "str";
+  } 
+  this.update_ability_scores();
+  this.clean_up_skills();
+  this.view.update_racial_bonuses(this);
+};
+
+/* Change the class.  Changing the class can change defenses and skill selections. 
+ * new_class: the name of the new class (a string). 
+ */
+Character.prototype.select_class = function(new_class) {
+  this.class_ = new_class;
+  this.update_defenses();
+  this.clean_up_skills();
+  this.view.change_kit_buttons(this);
+};
+
+/* Change the ability loadout - the list of numbers that the ability scores are drawn from.  This
+ * changes ability scores, of course.
+ * new_loadout: an array of six integers like [16, 14, 13, 12, 11, 10].
+ */ 
+Character.prototype.select_ability_loadout = function(new_loadout) {
+  this.ability_loadout = new_loadout;
+  this.update_ability_scores();
+  this.view.apply_ability_loadout(this);
+};
+
+/* Remake the ability permutation - the order that the list of ability scores are applied to the
+ * actual ability scores.  This changes ability scores.
+ * new_permutation: a map of internal ability names to indices like {str: 0, con: 1, ...}
+ */
+Character.prototype.remake_ability_permutation = function(new_permutation) {
+  this.ability_permutation = new_permutation;
+  this.update_ability_scores();
+  for (abil in this.ability_permutation) {
+    this.view.update_permutation(this, abil);
+  }
+};
+
+/* Make a spot change to the ability permutation.  The chosen ability will be placed at the chosen
+ * new rank, and the ability that occupied that rank before will be placed at the chosen ability's
+ * old rank.  This changes the ability scores.
+ * abil: the ability whose permutation order will change.
+ * new_rank: the new rank for the chosen ability.
+ */
+Character.prototype.change_ability_permutation = function(abil, new_rank) {
+  var old_rank = this.ability_permutation[abil];
+  for (other_abil in this.ability_permutation) {
+    if (this.ability_permutation[other_abil] == new_rank) {
+      this.enact_ability_swap(abil, new_rank);
+      this.enact_ability_swap(other_abil, old_rank);
+      break;
+    }
+  }
+  this.update_ability_scores();
+};
+
+/* Execute one piece of an ability swap.  Don't call this yourself. 
+ * abil: the ability to change the rank of.
+ * new_rank: the new rank of that ability.
+ */
+Character.prototype.enact_ability_swap = function(abil, new_rank) {
+  this.ability_permutation[abil] = new_rank;
+  this.view.update_permutation(this, abil);
+};
+
+/* Updates the actual ability scores of the character.  This updates the defenses and skill bonuses.
+ * Don't call this yourself.
+ */
+Character.prototype.update_ability_scores = function() {
+  if (this.race == "Human") {
+    var race_ability_modifiers = [this.human_ability_selection];
+  } else {
+    var race_ability_modifiers = RACES[this.race].ability_modifiers;
+  }
+  for (abil in this.ability_permutation) {
+    this.ability_scores[abil] = this.ability_loadout[this.ability_permutation[abil]];
+    if (array_contains(race_ability_modifiers, abil)) this.ability_scores[abil] += 2;
+    this.ability_bonuses[abil] = Math.floor((this.ability_scores[abil] - 10) / 2);
+  }
+  this.view.update_ability_scores(this);
+  this.update_defenses();
+  this.update_skill_bonuses();
+};
+
+/* changes the ability to apply the human's ability score modifier to. 
+ * abil: the ability to apply to.
+ */
+Character.prototype.update_human_ability_selection = function(abil) {
+  this.human_ability_selection = abil;
+  this.update_ability_scores();
+}
+
+/* Updates the actual defenses of the character.  Don't call this yourself. */
+Character.prototype.update_defenses = function() {
+  var race_defense_bonus = RACES[this.race].defense_bonuses;
+  if (!race_defense_bonus) race_defense_bonus = [0,0,0];
+  var class_defense_bonus = CLASSES[this.class_].defense_bonuses;
+  for (var k = 0; k < ABILITY_ORDER.length / 2; k++) {
+    var def = DEFENSE_ORDER[k];
+    this.naked_defenses[def] = 10 + Math.max(this.ability_bonuses[ABILITY_ORDER[2 * k]], this.ability_bonuses[ABILITY_ORDER[2 * k + 1]]) + race_defense_bonus[k] + class_defense_bonus[k];
+  }
+  this.view.update_defenses(this);
+};
+
+/* Change a single skill selection.  This updates the skill bonuses.
+ * index: the index of the skill selection that's changed.
+ * new_skill: the key for the new skill (the three-letter string like "ste")
+ */
+Character.prototype.select_skill = function(index, new_skill) {
+  this.skill_selections[index] = new_skill;
+  this.update_skill_bonuses();
+  this.view.update_skill_selections(this);
+};
+
+/* Determine the amount of freedom each skill selection has to change and still keep the overall
+ * skill selections legal.
+ * returns: the index of the highest category that each skill can be changed to while remaining in
+ * the legal skill selection space.
+ */
+Character.prototype.detect_skill_freedom = function() {
+  var categorization = this.categorize_skill_selections();
+  var skill_counts = this.generate_skill_counts();
+  var skill_selection_ids = categorization[0];
+  var selection_satisfied = categorization[1];
+  var requirement_breaks = [];
+  var total_req = 0;
+  var total_chosen = 0;
+  for (var k = 0; k < skill_counts.length; k += 1) {
+    total_req += skill_counts[k];
+    total_chosen += selection_satisfied[k];
+    if (total_req == total_chosen) {
+      requirement_breaks.push(k);
+    }
+  }
+  var freedom = [];
+  for (var k = 0; k < skill_selection_ids.length; k += 1) {
+    var selection = skill_selection_ids[k];
+    for (var j = 0; j < requirement_breaks.length; j += 1) {
+      if (requirement_breaks[j] >= selection) {
+        freedom.push(requirement_breaks[j]);
+        break;
+      }
+    }
+  }
+  return freedom;
+};
+
+/* calculates the full strength skill lists for the character.  This primarily means calculating
+ * which skills are not in any of the actual class skills.
+ */
+Character.prototype.class_skill_lists = function() {
+  var non_class_skills = [];
+  var class_skills = CLASSES[this.class_].class_skills;
+  for (var skill in SKILLS) {
+    var is_class_skill = false;
+    for (var j = 0; j < 2; j += 1) {
+      for (var i = 0; i < class_skills[j].length; i += 1) {
+        if (class_skills[j][i] == skill) {
+          is_class_skill = true;
+        }
+      }
+    }
+    if (!is_class_skill) {
+      non_class_skills.push(skill);
+    }
+  }
+  return class_skills.concat([non_class_skills]);
+};
+
+/* Determine the number of skills required in each category of skill.
+ * returns: a list of the number of skills required at each category.
+ */
+Character.prototype.generate_skill_counts = function() { // model
+  var class_skill_bonus = CLASSES[this.class_].skill_counts;
+  var racial_skill_bonus = RACES[this.race].bonus_skills;
+  if (!racial_skill_bonus) racial_skill_bonus = [0,0,0];
+  skill_counts = [];
+  for (var k = 0; k < class_skill_bonus.length; k += 1) {
+    skill_counts.push(class_skill_bonus[k] + racial_skill_bonus[k]);
+  }
+  return skill_counts;
+};
+
+/* Take each skill selection that the character has and determine the category each falls into.
+ * returns: two arrays; one to say what category each skill is in, the other to say how many skills
+ * have been selected in each category.
+ */
+Character.prototype.categorize_skill_selections = function() {
+  var skill_selections = this.skill_selections;
+  var skill_lists = this.class_skill_lists();
+  var skill_counts = this.generate_skill_counts();
+  var skill_selection_ids = [];
+  var selection_satisfied = [];
+  for (var k = 0; k < skill_counts.length; k += 1) {
+    selection_satisfied.push(0);
+  }
+  for (var k = 0; k < skill_selections.length; k += 1) {
+    var skill = skill_selections[k];
+    for (var j = 0; j < skill_lists.length; j += 1) {
+      var internal_list = skill_lists[j];
+      var found = false;
+      for (var i = 0; i < internal_list.length; i += 1) {
+        if (skill == internal_list[i]) {
+          found = true;
+          skill_selection_ids.push(j);
+          selection_satisfied[j] += 1;
+          break;
+        }
+      }
+      if (found) break;
+    }
+  }
+  return [skill_selection_ids, selection_satisfied];
+};
+
+/* examines the skill selections that the character has currently made and rejiggers them if they
+ * are not currently valid.  If the skill selection list is too long or too short, or doesn't
+ * contain enough skills in a given category, that will be corrected.
+ * returns: a corrected skill selection list, or undefined if no corrections need to be made.
+ */
+Character.prototype.validate_skill_selections = function() {
+  var new_skill_selections = this.skill_selections.slice();
+  var categorization = this.categorize_skill_selections();
+  var skill_selection_ids = categorization[0];
+  var selection_satisfied = categorization[1];
+  var internal_lists = this.class_skill_lists();
+  var skill_counts = this.generate_skill_counts();
+  var total_req = 0;
+  var total_chosen = 0;
+  var available_skills = [];
+  for (var k = 0; k < skill_counts.length; k += 1) {
+    total_req += skill_counts[k];
+    total_chosen += selection_satisfied[k];
+    available_skills = available_skills.concat(internal_lists[k]).sort();
+    while (total_req > total_chosen) {
+      for (var j = 0; j < available_skills.length; j += 1) {
+        if (!array_contains(new_skill_selections, available_skills[j])) {
+          new_skill_selections.push(available_skills[j]);
+          total_chosen += 1;
+          break;
+        }
+      }
+    }
+  }
+  while (new_skill_selections.length > total_req) {
+    var ranks = []; 
+    for (var k = 0; k < skill_selection_ids.length; k += 1) {
+      ranks.push(k + skill_selection_ids[k] * skill_selection_ids.length);
+    }
+    target = array_max(ranks) % skill_selection_ids.length;
+    new_skill_selections.splice(target, 1);
+    skill_selection_ids.splice(target, 1);
+  }
+  if (array_compare(this.skill_selections, new_skill_selections)) return undefined;
+  else return new_skill_selections;
+};
+
+/* Examines the results of validation and takes action based on that. */
+Character.prototype.clean_up_skills = function() {
+  validation = this.validate_skill_selections();
+  if (validation) {
+    this.skill_selections = validation;
+    this.update_skill_bonuses();
+    this.view.update_skill_selections(this);
+  }
+};
+
+Character.prototype.update_skill_bonuses = function() {
+  for (skill in SKILLS) {
+    var worksheet = {};
+    if (array_contains(this.skill_selections, skill)) {
+      worksheet.trained = 5;
+    } else {
+      worksheet.trained = 0;
+    }
+    if (array_contains(RACES[this.race].skill_bonuses, skill)) {
+      worksheet.misc = 2;
+    } else {
+      worksheet.misc = 0;
+    }
+    worksheet.ability = this.ability_bonuses[SKILLS[skill].ability];
+    this.skill_worksheets[skill] = worksheet;
+    this.skill_bonuses[skill] = worksheet.trained + worksheet.misc + worksheet.ability;
+  }
+  this.view.update_skill_bonuses(this);
+};
+
+/* Fills in the entire character sheet at once. */
+Character.prototype.force = function(new_class, new_race, new_loadout, new_permutation, new_skill_list) {
+  this.class_ = new_class;
+  this.race = new_race;
+  this.ability_loadout = new_loadout;
+  this.ability_permutation = new_permutation;
+  this.skill_selections = new_skill_list;
+  this.update_ability_scores();
+  this.clean_up_skills();
+  this.update_skill_bonuses();
+  this.view.all_updates(this);
+};
+
+Character.prototype.apply_kit = function(new_kit_name) {
+  var kit = CLASSES[this.class_].kits[new_kit_name];
+  var clean_permutation = {};
+  for (abil in kit.permutation) {
+    clean_permutation[abil] = kit.permutation[abil];
+  }
+  var clean_skills = kit.skills.slice(0);
+  this.ability_permutation = clean_permutation;
+  this.skill_selections = clean_skills;
+  this.update_ability_scores();
+  this.clean_up_skills();
+  this.update_skill_bonuses();
+  this.view.all_updates(this);
+}
+
+
+
+view = {
+  update_race: function(character) {
+    $("#race_dropdown").val(character.race);
+  },
+
+  update_class: function(character) {
+    $("#class_dropdown").val(character.class_);
+  },
+  
+  update_loadout: function(character) {
+    for (var k = 0; k < ABILITY_LOADOUTS.length; k += 1) {
+      if (array_compare(character.ability_loadout, ABILITY_LOADOUTS[k])) {
+        $("#ability_dropdown").val(String(k));
+        break;
+      }
+    }
+  },
+  
+  apply_ability_loadout: function(character) {
+    for (var k = 0; k < character.ability_loadout.length; k += 1) {
+      $("#ability_" + String(k)).html(character.ability_loadout[k]);
+    }
+  },
+  
+  update_permutation: function(character, abil) {
+    var id = "#" + abil + "_" + String(character.ability_permutation[abil]);
+    $("#" + abil + "_" + character.ability_permutation[abil]).attr("checked", "checked"); 
+  },
+
+  update_racial_bonuses: function(character) {
+    if (character.race != "Human") {
+      for (var abil in ABILITY_SCORES) {
+        if (array_contains(RACES[character.race].ability_modifiers, abil)) {
+          var bonus = 2;
+        } else {
+          var bonus = 0;
+        }
+        $("#" + abil + "_race_bonus").html(bonus_string(bonus));
+      }
+    } else { // humans get to select one ability score to add +2 to.
+      for (var abil in ABILITY_SCORES) {
+        var radio = $("<input>", {type: "radio",
+                                  id: "human_ability_" + abil,
+                                  value: abil,
+                                  name: "human_ability_selection", 
+                                  click: control_human_ability_selection
+                                 });
+        $("#" + abil + "_race_bonus").empty().append(radio);
+      }
+      $('[name=human_ability_selection]').val([character.human_ability_selection]);
+    }
+  },
+
+  update_ability_scores: function(character) {
+    for (abil in character.ability_scores) {
+      $("#" + abil + "_score").html(String(character.ability_scores[abil]));
+      $("#" + abil + "_bonus").html(String(bonus_string(character.ability_bonuses[abil])));
+    }
+  },
+  
+  update_defenses: function(character) {
+    for (def in character.naked_defenses) {
+      $("#" + def).html(character.naked_defenses[def]);
+    }
+  },
+  
+  update_skill_selections: function(character) {
+    var dropdown_count = character.skill_selections.length;
+    var skill_freedom = character.detect_skill_freedom();
+    var skill_lists = character.class_skill_lists(); 
+    var container = $("#skill_dropdowns");
+    container.empty();
+    for (var dd = 0; dd < dropdown_count; dd += 1) {
+      var enabled_count = 0;
+      var dropdown_div = $("<p>", {id: "skill_div_" + String(dd)});
+      var dropdown = $("<select>", {id: "skill_dropdown_" + String(dd), name: "skill_dropdown_" + String(dd), change: control_skill_selection});
+      container.append(dropdown_div);
+      for (var cat = 0; cat < skill_lists.length; cat += 1) {
+        var cat_enabled = true;
+        if (skill_lists[cat].length == 0) continue; // skip making empty categories.
+        var category = $("<optgroup>", {label: SKILL_GROUP_NAMES[cat]});
+		if (skill_freedom[dd] < cat) {
+          category.attr("disabled", "disabled");
+          cat_enabled = false;
+        }
+        dropdown.append(category);
+        for (var sk = 0; sk < skill_lists[cat].length; sk += 1) {
+          var skill_enabled = true;
+          var skill_id = skill_lists[cat][sk];
+          var skill_item = $("<option>", {id: "skill_dropdown_" + String(dd) + "_" + skill_id, value: skill_id, text: SKILLS[skill_id].long});
+          category.append(skill_item);
+          if (player.skill_selections[dd] == skill_id) {
+            skill_item.attr("selected", "selected");
+          } else if (character.skill_selections[dd] != skill_id && array_contains(character.skill_selections, skill_id)) {
+            skill_item.attr("disabled", "disabled");
+            skill_enabled = false;
+          }
+          if (cat_enabled && skill_enabled) {
+            enabled_count += 1;
+            var enabled_name = SKILLS[skill_id].long;
+		  }
+        }
+      }
+      if (enabled_count > 1) {
+        dropdown_div.append(dropdown);
+	  } else {
+		dropdown_div.html(enabled_name);
+	  }
+    }
+  },
+  
+  update_skill_bonuses: function(character) {
+    for (skill in SKILLS) {
+      worksheet = character.skill_worksheets[skill];
+      bonus = character.skill_bonuses[skill];
+      $("#" + skill + "_skill_bonus").html(bonus_string(bonus));
+      $("#" + skill + "_skill_ability").html(bonus_string(worksheet.ability));
+      if (worksheet.trained != 0) {
+        $("#" + skill + "_skill_trained").html(bonus_string(worksheet.trained));
+      } else {
+        $("#" + skill + "_skill_trained").empty();
+      }
+      if (worksheet.misc != 0) {
+        $("#" + skill + "_skill_misc").html(bonus_string(worksheet.misc));
+      } else {
+        $("#" + skill + "_skill_misc").empty();
+      }
+    }
+  },
+  
+  change_kit_buttons: function(character) {
+    kit_button_container = $("#kits_zone");
+    kit_button_container.empty();
+    for (kit_name in CLASSES[character.class_].kits) {
+      var button = $("<button>", {type: "button", 
+                              click: control_apply_kit, 
+                              value: kit_name, 
+                              text: kit_name});
+      kit_button_container.append(button);
+    }
+  },
+  
+  all_updates: function(character) {
+    this.update_race(character);
+    this.update_class(character);
+    this.update_loadout(character);
+    this.apply_ability_loadout(character);
+    for (abil in character.ability_permutation) {
+      this.update_permutation(character, abil);
+    }
+    this.update_racial_bonuses(character);
+    this.update_ability_scores(character);
+    this.update_defenses(character);
+    this.update_skill_selections(character);
+    this.update_skill_bonuses(character);
+    this.change_kit_buttons(character);
+  }
+}
+
+ABILITY_SCORES = {
+  str: {long: "Strength",     short: "Str"},
+  con: {long: "Constitution", short: "Con"},
+  dex: {long: "Dexterity",    short: "Dex"},
+  int: {long: "Intelligence", short: "Int"},
+  wis: {long: "Wisdom",       short: "Wis"},
+  cha: {long: "Charisma",     short: "Cha"}
+};
+
+DEFENSES = {
+  fort: {long: "Fortitude",   short: "Fort"},
+  ref:  {long: "Reflex",      short: "Ref" },
+  will: {long: "Will",        short: "Will"},
+  ac:   {long: "Armor Class", short: "AC"  }
+};
+
+RACES = {
+  "Dragonborn": {
+    ability_modifiers: ["str", "cha"],
+    skill_bonuses: ["his", "int"],
+    size: "M",
+    speed: 6,
+    vision: "Normal",
+    languages: ["Common", "Draconic"]
+  },
+  "Dwarf": {
+    ability_modifiers: ["con", "wis"],
+    skill_bonuses: ["dun", "end"],
+    size: "M",
+    speed: 5,
+    vision: "Low-light",
+    languages: ["Common", "Dwarven"]
+  },
+  "Eladrin": {
+    ability_modifiers: ["dex", "int"],
+    skill_bonuses: ["arc", "his"],
+    defense_bonuses: [0, 0, 1],
+    bonus_skills: [0, 0, 1],
+    size: "M",
+    speed: 6,
+    vision: "Low-light",
+    languages: ["Common", "Elven"]
+  },
+  "Elf": {
+    ability_modifiers: ["dex", "wis"],
+    skill_bonuses: ["nat", "per"],
+    size: "M",
+    speed: 7,
+    vision: "Low-light",
+    languages: ["Common", "Elven"]
+  },
+  "Half-Elf": {
+    ability_modifiers: ["str", "cha"],
+    skill_bonuses: ["dip", "ins"],
+    size: "M",
+    speed: 6,
+    vision: "Low-light",
+    languages: ["Common", "Elven"],
+    bonus_languages: 1
+  },
+  "Halfling": {
+    ability_modifiers: ["dex", "cha"],
+    skill_bonuses: ["acr", "thi"],
+    size: "S",
+    speed: 6,
+    vision: "Normal",
+    languages: ["Common"],
+    bonus_languages: 1
+  },
+  "Human": {
+    defense_bonuses: [1, 1, 1],
+    bonus_skills: [0, 1, 0],
+    size: "M",
+    speed: 6,
+    vision: "Normal",
+    languages: ["Common"],
+    bonus_languages: 1
+  },
+  "Tiefling": {
+    ability_modifiers: ["int", "cha"],
+    skill_bonuses: ["blu", "ste"],
+    size: "M",
+    speed: 6,
+    vision: "Low-light",
+    languages: ["Common"],
+    bonus_languages: 1
+  },
+  "Deva": {
+    ability_modifiers: ["int", "wis"],
+    skill_bonuses: ["his", "rel"],
+    size: "M",
+    speed: 6,
+    vision: "Normal",
+    languages: ["Common"],
+    bonus_languages: 2
+  },
+  "Gnome": {
+    ability_modifiers: ["int", "cha"],
+    skill_bonuses: ["arc", "ste"],
+    size: "S",
+    speed: 5,
+    vision: "Low-light",
+    languages: ["Common", "Elven"]
+  },
+  "Goliath": {
+    ability_modifiers: ["str", "con"],
+    defense_bonuses: [0, 0, 1],
+    skill_bonuses: ["ath", "nat"],
+    size: "M",
+    speed: 6,
+    vision: "Normal",
+    languages: ["Common", "Dwarven", "Giant"]
+  },
+  "Half-Orc": {
+    ability_modifiers: ["str", "dex"],
+    skill_bonuses: ["end", "int"],
+    size: "M",
+    speed: 6,
+    vision: "Low-light",
+    languages: ["Common", "Giant"]
+  },
+  "Shifter (Longtooth)": {
+    ability_modifiers: ["str", "wis"],
+    skill_bonuses: ["ath", "end"],
+    size: "M",
+    speed: 6,
+    vision: "Low-light",
+    languages: ["Common"],
+    bonus_languages: 1
+  },
+  "Shifter (Razorclaw)": {
+    ability_modifiers: ["dex", "wis"],
+    skill_bonuses: ["acr", "ste"],
+    size: "M",
+    speed: 6,
+    vision: "Low-light",
+    languages: ["Common"],
+    bonus_languages: 1
+  }
+};
+
+CLASSES = {
+  "Cleric": {
+    defense_bonuses: [0, 0, 2],
+    skill_counts: [1, 3, 0],
+    class_skills: [["rel"], ["arc", "dip", "hea", "his", "ins"]],
+    role: "Leader",
+    source: "Divine",
+    armor_proficiencies: ["Cloth", "Leather", "Hide", "Chain"],
+    weapon_proficiencies: ["Simple Melee", "Simple Ranged"],
+    implements: ["Holy Symbol"],
+    starting_hp: 12,
+    per_level_hp: 5,
+    surges: 7,
+    kits: {
+      "Battle Cleric": {
+        permutation: {str: 0, wis: 1, cha: 2, int: 3, con: 4, dex: 5},
+        skills: ["rel", "dip", "hea", "ins"],
+        feats: ["Weapon Focus", "Action Surge"],
+        powers: {
+          at_will: ["Righteous Brand", "Priest's Shield"],
+          encounter: ["Wrathful Thunder"],
+          daily: ["Avenging Flame"]
+        }
+      },
+      "Devoted Cleric": {
+        permutation: {wis: 0, cha: 1, str: 2, int: 3, con: 4, dex: 5},
+        skills: ["rel", "arc", "hea", "his"],
+        feats: ["Channel Divinity", "Human Perseverance"],
+        powers: {
+          at_will: ["Lance of Faith", "Sacred Flame"],
+          encounter: ["Healing Strike"],
+          daily: ["Beacon of Hope"]
+        }
+      }
+    }
+  },
+  "Fighter": {
+    defense_bonuses: [2, 0, 0],
+    skill_counts: [0, 3, 0],
+    class_skills: [[], ["ath", "end", "hea", "int", "str"]],
+    role: "Defender",
+    source: "Martial",
+    armor_proficiencies: ["Cloth", "Leather", "Hide", "Chain", "Scale", "Light Shield", "Heavy Shield"],
+    weapon_proficiencies: ["Simple Melee", "Military Melee", "Simple Ranged", "Military Ranged"],
+    starting_hp: 15,
+    per_level_hp: 6,
+    surges: 9,
+    kits: {
+      "Great Weapon Fighter": {
+        permutation: {str: 0, con: 1, dex: 2, cha: 3, int: 4, wis: 5},
+        skills: ["ath", "end", "int"],
+        feats: ["Power Attack", "Action Surge"],
+        powers: {
+          at_will: ["Cleave", "Reaping Strike"],
+          encounter: ["Spinning Sweep"],
+          daily: ["Brute Strike"]
+        }
+      },
+      "Guardian Fighter": {
+        permutation: {str: 0, wis: 1, dex: 2, con: 3, int: 4, cha: 5},
+        skills: ["hea", "int", "str"],
+        feats: ["Weapon Focus", "Human Perseverance"],
+        powers: {
+          at_will: ["Sure Strike", "Tide of Iron"],
+          encounter: ["Covering Attack"],
+          daily: ["Comeback Strike"]
+        }
+      }
+    }
+  },
+  "Paladin": {
+    defense_bonuses: [1, 1, 1],
+    skill_counts: [1, 3, 0],
+    class_skills: [["rel"], ["dip", "end", "hea", "his", "ins", "int"]],
+    role: "Defender",
+    source: "Divine",
+    armor_proficiencies: ["Cloth", "Leather", "Hide", "Chain", "Scale", "Plate", "Light Shield", "Heavy Shield"],
+    weapon_proficiencies: ["Simple Melee", "Military Melee", "Simple Ranged"],
+    implements: ["Holy Symbol"],
+    starting_hp: 15,
+    per_level_hp: 6,
+    surges: 10,
+    kits: {
+      "Avenging Paladin": {
+        permutation: {str: 0, cha: 1, wis: 2, int: 3, con: 4, dex: 5},
+        skills: ["rel", "end", "hea", "int"],
+        feats: ["Power Attack", "Human Perseverance"],
+        powers: {
+          at_will: ["Holy Strike", "Valiant Strike"],
+          encounter: ["Radiant Smite"],
+          daily: ["Paladin's Judgment"]
+        }
+      },
+      "Protecting Paladin": {
+        permutation: {cha: 0, str: 1, wis: 2, con: 3, int: 4, dex: 5},
+        skills: ["rel", "dip", "hea", "ins"],
+        feats: ["Healing Hands", "Action Surge"],
+        powers: {
+          at_will: ["Bolstering Strike", "Enfeebling Strike"],
+          encounter: ["Shielding Smite"],
+          daily: ["Radiant Delirium"]
+        }
+      }
+    }
+  },
+  "Ranger": {
+    defense_bonuses: [1, 1, 0],
+    skill_counts: [1, 4, 0],
+    class_skills: [["dun", "nat"], ["acr", "ath", "end", "hea", "per", "ste"]],
+    role: "Striker",
+    source: "Martial",
+    armor_proficiencies: ["Cloth", "Leather", "Hide"],
+    weapon_proficiencies: ["Simple Melee", "Military Melee", "Simple Ranged", "Military Ranged"],
+    starting_hp: 12,
+    per_level_hp: 5,
+    surges: 6,
+    kits: {
+      "Archer Ranger": {
+        permutation: {dex: 0, str: 1, wis: 2, con: 3, int: 4, cha: 5},
+        option: "Archer",
+        skills: ["end", "hea", "nat", "per", "ste"],
+        feats: ["Agile Hunter", "Human Perseverance"],
+        powers: {
+          at_will: ["Careful Attack", "Nimble Strike"],
+          encounter: ["Evasive Strike"],
+          daily: ["Split the Tree"]
+        }
+      },
+      "Two-Blade Ranger": {
+        permutation: {str: 0, dex: 1, wis: 2, con: 3, int: 4, cha: 5},
+        option: "Two-Blade",
+        skills: ["acr", "dun", "end", "hea", "per"],
+        feats: ["Lethal Hunter", "Action Surge"],
+        powers: {
+          at_will: ["Hit and Run", "Twin Strike"],
+          encounter: ["Dire Wolverine Strike"],
+          daily: ["Jaws of the Wolf"]
+        }
+      }
+    }
+  },
+  "Rogue": {
+    defense_bonuses: [0, 2, 0],
+    skill_counts: [2, 4, 0],
+    class_skills: [["ste", "thi"], ["acr", "ath", "blu", "dun", "ins", "int", "per", "str"]],
+    role: "Striker",
+    source: "Martial",
+    armor_proficiencies: ["Cloth", "Leather"],
+    weapon_proficiencies: ["Dagger", "Hand Crossbow", "Shuriken", "Sling", "Short Sword"],
+    starting_hp: 12,
+    per_level_hp: 5,
+    surges: 6,
+    kits: {
+      "Brawny Rogue": {
+        permutation: {dex: 0, str: 1, cha: 2, int: 3, con: 4, wis: 5},
+        option: "Brutal Scoundrel",
+        skills: ["ste", "thi", "ath", "dun", "int", "str"],
+        feats: ["Weapon Focus", "Toughness"],
+        powers: {
+          at_will: ["Piercing Strike", "Riposte Strike"],
+          encounter: ["Torturous Strike"],
+          daily: ["Easy Target"]
+        }
+      },
+      "Trickster Rogue": {
+        permutation: {dex: 0, cha: 1, str: 2, int: 3, con: 4, wis: 5},
+        option: "Artful Dodger",
+        skills: ["ste", "thi", "acr", "blu", "ins", "per"],
+        feat: ["Backstabber", "Human Perseverance"],
+        powers: {
+          at_will: ["Deft Strike", "Sly Flourish"],
+          encounter: ["Positioning Strike"],
+          daily: ["Trike Strike"]
+        }
+      }
+    }
+  },
+  "Warlock": {
+    defense_bonuses: [0, 1, 1],
+    skill_counts: [0, 4, 0],
+    class_skills: [[], ["arc", "blu", "his", "ins", "int", "rel", "str", "thi"]],
+    role: "Striker",
+    source: "Arcane",
+    armor_proficiencies: ["Cloth", "Leather"],
+    weapon_proficiencies: ["Simple Melee", "Simple Ranged"],
+    implements: ["Rod", "Wand"],
+    starting_hp: 12,
+    per_level_hp: 5,
+    surges: 6,
+    kits: {
+      "Deceptive Warlock": {
+        permutation: {cha: 0, int: 1, con: 2, dex: 3, wis: 4, str: 5},
+        option: "Fey Pact",
+        skills: ["arc", "blu", "ins", "thi"],
+        feat: ["Improved Misty Step", "Human Perseverance"],
+        powers: {
+          at_will: ["Eldritch Blast", "Eyebite"],
+          encounter: ["Witchfire"],
+          daily: ["Curse of the Dark Dream"]
+        }
+      },
+      "Scourge Warlock": {
+        permutation: {con: 0, int: 1, cha: 2, wis: 3, dex: 4, str: 5},
+        option: "Infernal Pact",
+        skills: ["arc", "his", "int", "str"],
+        feat: ["Improved Dark One's Blessing", "Action Surge"],
+        powers: {
+          at_will: ["Eldritch Blast", "Hellish Rebuke"],
+          encounter: ["Vampiric Embrace"],
+          daily: ["Flames of Phlegethos"]
+        }
+      }
+    }
+  },
+  "Warlord": {
+    defense_bonuses: [1, 0, 1],
+    skill_counts: [0, 4, 0],
+    class_skills: [[], ["ath", "dip", "end", "hea", "his", "int"]],
+    role: "Leader",
+    source: "Martial",
+    armor_proficiencies: ["Cloth", "Leather", "Hide", "Chainmail", "Light Shield"],
+    weapon_proficiencies: ["Simple Melee", "Military Melee", "Simple Ranged"],
+    starting_hp: 12,
+    per_level_hp: 5,
+    surges: 7,
+    kits: {
+      "Inspiring Warlord": {
+        permutation: {str: 0, cha: 1, int: 2, con: 3, wis: 4, dex: 5},
+        option: "Inspiring Presence",
+        skills: ["ath", "dip", "hea", "his"],
+        feat: ["Inspired Recovery", "Toughness"],
+        powers: {
+          at_will: ["Commander's Strike", "Furious Smash"],
+          encounter: ["Guarding Attack"],
+          daily: ["Bastion of Defense"]
+        }
+      },
+      "Tactical Warlord": {
+        permutation: {str: 0, int: 1, cha: 2, con: 3, dex: 4, wis: 5},
+        option: "Tactical Presence",
+        skills: ["end", "hea", "his", "int"],
+        feat: ["Tactical Assault", "Weapon Focus"],
+        powers: {
+          at_will: ["Viper's Strike", "Wolf Pack Tactics"],
+          encounter: ["Warlord's Favor"],
+          daily: ["Lead the Attack"]
+        }
+      }
+    }   
+  },
+  "Wizard": {
+    defense_bonuses: [0, 0, 2],
+    skill_counts: [1, 3, 0],
+    class_skills: [["arc"], ["dip", "dun", "his", "ins", "nat", "rel"]],
+    role: "Controller",
+    source: "Arcane",
+    armor_proficiencies: ["Cloth"],
+    weapon_proficiencies: ["Dagger", "Quarterstaff"],
+    implements: ["Orb", "Staff", "Wand"],
+    starting_hp: 10,
+    per_level_hp: 4,
+    surges: 6,
+    kits: {
+      "Control Wizard": {
+        permutation: {int: 0, wis: 1, dex: 2, con: 3, cha: 4, str: 5},
+        option: "Orb of Imposition",
+        skills: ["arc", "dip", "ins", "nat"],
+        feat: ["Improved Initiative", "Human Perseverance"],
+        powers: {
+          at_will: ["Cloud of Daggers", "Thunderwave"],
+          encounter: ["Icy Terrain"],
+          daily: ["Sleep", "Flaming Sphere"]
+        }
+      },
+      "War Wizard": {
+        permutation: {int: 0, dex: 1, wis: 2, con: 3, cha: 4, str: 5},
+        option: "Wand of Accuracy",
+        skills: ["arc", "dun", "his", "rel"],
+        feat: ["Expanded Spellbook", "Action Surge"],
+        powers: {
+          at_will: ["Magic Missile", "Scorching Burst"],
+          encounter: ["Burning Hands"],
+          daily: ["Acid Arrow", "Freezing Cloud"]
+        }
+      }
+    }
+  },
+  "Avenger": {
+    defense_bonuses: [1, 1, 1],
+    skill_counts: [1, 3, 0],
+    class_skills: [["rel"], ["acr", "ath", "end", "hea", "int", "per", "ste", "str"]],
+    role: "Striker",
+    source: "Divine",
+    armor_proficiencies: ["Cloth"],
+    weapon_proficiencies: ["Simple Melee", "Military Melee", "Simple Ranged"],
+    implements: ["Holy Symbol"],
+    starting_hp: 14,
+    per_level_hp: 6,
+    surges: 7,
+    kits: {
+      "Isolating Avenger": {
+        permutation: {wis: 0, int: 1, str: 2, cha: 3, con: 4, dex: 5},
+        option: "Censure of Retribution",
+        skills: ["rel", "ath", "int", "str"],
+        feat: ["Toughness"],
+        powers: {
+          at_will: ["Bond of Retribution", "Overwhelming Strike"],
+          encounter: ["Avenging Echo"],
+          daily: ["Temple of Light"]
+        }
+      },
+      "Pursuing Avenger": {
+        permutation: {wis: 0, dex: 1, str: 2, dex: 3, con: 4, cha: 5},
+        option: "Censure of Pursuit",
+        skills: ["rel", "acr", "per", "ste"],
+        feat: ["Invigorating Pursuit"],
+        powers: {
+          at_will: ["Bond of Pursuit", "Radiant Vengeance"],
+          encounter: ["Angelic Alacrity"],
+          daily: ["Oath of the Final Duel"]
+        }
+      }
+    }
+  },
+  "Barbarian": {
+    defense_bonuses: [2, 0, 0],
+    skill_counts: [0, 3, 0],
+    class_skills: [[], ["acr", "ath", "end", "hea", "int", "nat", "per"]],
+    role: "Striker",
+    source: "Primal",
+    armor_proficiencies: ["Cloth", "Leather", "Hide"],
+    weapon_proficiencies: ["Simple Melee", "Military Melee"],
+    starting_hp: 15,
+    per_level_hp: 6,
+    surges: 8,
+    kits: {
+      "Rageblood Barbarian": {
+        permutation: {str: 0, con: 1, cha: 2, dex: 3, int: 4, wis: 5},
+        option: "Rageblood Vigor",
+        skills: ["ath", "end", "per"],
+        feat: ["Weapon Expertise"],
+        powers: {
+          at_will: ["Devastating Strike", "Recuperating Strike"],
+          encounter: ["Avalance Strike"],
+          daily: ["Bloodhunt Rage"]
+        }
+      },
+      "Thaneborn Barbarian": {
+        permutation: {str: 0, cha: 1, con: 2, dex: 3, int: 4, wis: 5},
+        option: "Thaneborn Triumph",
+        skills: ["ath", "int", "per"],
+        feat: ["Rising Fury"],
+        powers: {
+          at_will: ["Howling Strike", "Pressing Strike"],
+          encounter: ["Vault the Fallen"],
+          daily: ["Macetail's Rage"]
+        }
+      }
+    }
+  },
+  "Bard": {
+    defense_bonuses: [0, 1, 1],
+    skill_counts: [1, 4, 0],
+    class_skills: [["arc"], ["acr", "ath", "blu", "dip", "dun", "hea", "his", "ins", "int", "nat", "per", "rel", "str"]],
+    role: "Leader",
+    source: "Arcane",
+    armor_proficiencies: ["Cloth", "Leather", "Hide", "Chain", "Light Shield"],
+    weapon_proficiencies: ["Simple Melee", "Longsword", "Scimitar", "Short Sword", "Simple Ranged", "Military Ranged"],
+    implements: ["Wand"],
+    starting_hp: 12,
+    per_level_hp: 5,
+    surges: 7,
+    kits: {
+      "Cunning Bard": {
+        permutation: {cha: 0, int: 1, con: 2, wis: 3, dex: 4, str: 5},
+        option: "Virtue of Cunning",
+        skills: ["arc", "blu", "int", "per", "str"],
+        feat: ["Advantage of Cunning"],
+        powers: {
+          at_will: ["Misdirected Mark", "Vicious Mockery"],
+          encounter: ["Blunder"],
+          daily: ["Stirring Shout"]
+        }
+      },
+      "Valorous Bard": {
+        permutation: {cha: 0, con: 1, int: 2, wis: 3, str: 5, dex: 6},
+        option: "Virtue of Valor",
+        skills: ["arc", "ath", "dip", "int", "per"],
+        feat: ["Strength of Valor"],
+        powers: {
+          at_will: ["Guiding Strike", "War Song Strike"],
+          encounter: ["Shout of Triumph"],
+          daily: ["Slayer's Song"]
+        }
+      }
+    }
+  },
+  "Druid": {
+    defense_bonuses: [0, 1, 1],
+    skill_counts: [1, 3, 0],
+    class_skills: [["nat"], ["arc", "ath", "dip", "end", "hea", "his", "ins", "per"]],
+    role: "Controller",
+    source: "Primal",
+    armor_proficiencies: ["Cloth", "Leather", "Hide"],
+    weapon_proficiencies: ["Simple Melee", "Simple Ranged"],
+    implements: ["Staff", "Totem"],
+    starting_hp: 12,
+    per_level_hp: 5,
+    surges: 7,
+    kits: {
+      "Guardian Druid": {
+        permutation: {wis: 0, con: 1, int: 2, cha: 3, dex: 4, str: 5},
+        option: "Primal Guardian",
+        skills: ["nat", "arc", "hea", "ins"],
+        feat: ["Primal Instinct"],
+        powers: {
+          at_will: ["Call of the Beast", "Chill Wind", "Grasping Claws"],
+          encounter: ["Frost Flash"],
+          daily: ["Fires of Life"]
+        }
+      },
+      "Predator Druid": {
+        permutation: {wis: 0, dex: 1, con: 2, str: 3, int: 4, wis: 5},
+        option: "Primal Predator",
+        skills: ["nat", "arc", "ath", "per"],
+        feat: ["Primal Fury"],
+        powers: {
+          at_will: ["Flame Seed", "Pounce", "Savage Rend"],
+          encounter: ["Darting Bite"],
+          daily: ["Savage Frenzy"]
+        }
+      }
+    }
+  },
+  "Invoker": {
+    defense_bonuses: [1, 1, 1],
+    skill_counts: [1, 3, 0],
+    class_skills: [["rel"], ["arc", "dip", "end", "his", "ins", "int"]],
+    role: "Controller",
+    source: "Divine",
+    armor_proficiencies: ["Cloth", "Leather", "Hide", "Chain"],
+    weapon_proficiencies: ["Simple Melee", "Simple Ranged"],
+    implements: ["Rod", "Staff"],
+    starting_hp: 10,
+    per_level_hp: 4,
+    surges: 6,
+    kits: {
+      "Preserving Invoker": {
+        permutation: {wis: 0, int: 1, con: 2, cha: 3, dex: 4, str: 5},
+        option: "Covenant of Preservation",
+        skills: ["rel", "arc", "dip", "his"],
+        feat: ["Insightful Preservation"],
+        powers: {
+          at_will: ["Sun Strike", "Vanguard's Lightning"],
+          encounter: ["Blades of Astral Fire"],
+          daily: ["Binding Invocation of Chains"]
+        }
+      },
+      "Wrathful Invoker": {
+        permutation: {wis: 0, con: 1, int: 2, cha: 3, dex: 4, str: 5},
+        option: "Covenant of Wrath",
+        skills: ["rel", "end", "ins", "int"],
+        feat: ["Invoker Defense"],
+        powers: {
+          at_will: ["Avenging Light", "Grasping Shards"],
+          encounter: ["Thunder of Judgment"],
+          daily: ["Purging Flame"]
+        }
+      }
+    }
+  },
+  "Shaman": {
+    defense_bonuses: [1, 0, 1],
+    skill_counts: [1, 3, 0],
+    class_skills: [["nat"], ["arc", "ath", "end", "hea", "his", "ins", "per", "rel"]],
+    role: "Leader",
+    source: "Primal",
+    armor_proficiencies: ["Cloth", "Leather"],
+    weapon_proficiencies: ["Simple melee", "Longspear"],
+    starting_hp: 12,
+    per_level_hp: 5,
+    surges: 7,
+    kits: {
+      "Bear Shaman": {
+        permutation: {wis: 0, con: 1, int: 2, str: 3, dex: 4, cha: 5},
+        option: "Protector Spirit",
+        skills: ["nat", "end", "hea", "per"],
+        feat: ["Shared Healing Spirit"],
+        powers: {
+          at_will: ["Defending Strike", "Protecting Strike"],
+          encounter: ["Thunder Bear's Warding"],
+          daily: ["Spirit of the Healing Flood"]
+        }
+      },
+      "Panther Shaman": {
+        permutation: {wis: 0, int: 1, con: 2, str: 3, dex: 4, cha: 5},
+        option: "Stalker Spirit",
+        skills: ["nat", "ath", "hea", "per"],
+        feat: ["Stalker Spirit Adept"],
+        powers: {
+          at_will: ["Stalker's Strike", "Watcher's Strike"],
+          encounter: ["Twin Panthers"],
+          daily: ["Wrath of the Spirit World"]
+        }
+      }
+    }
+  },
+  "Sorcerer": {
+    defense_bonuses: [0, 0, 2],
+    skill_counts: [1, 3, 0],
+    class_skills: [["arc"], ["ath", "blu", "dip", "dun", "end", "his", "ins", "int", "nat"]],
+    role: "Striker",
+    source: "Arcane",
+    armor_proficiencies: ["Cloth"],
+    weapon_proficiencies: ["Simple Melee", "Simple Ranged"],
+    implements: ["Dagger", "Staff"],
+    starting_hp: 12,
+    per_level_hp: 5,
+    surges: 6,
+    kits: {
+      "Chaos Sorcerer": {
+        permutation: {cha: 0, dex: 1, str: 2, int: 3, wis: 4, con: 5},
+        option: "Wild Magic",
+        skills: ["arc", "blu", "end", "ins"],
+        feat: ["Arcane Spellfury"],
+        powers: {
+          at_will: ["Chaos Bolt", "Storm Walk"],
+          encounter: ["Bedeviling Burst"],
+          daily: ["Dazzling Ray"]
+        }
+      },
+      "Dragon Sorcerer": {
+        permutation: {cha: 0, str: 1, dex: 2, int: 3, wis: 4, con: 5},
+        option: "Dragon Magic",
+        skills: ["arc", "ath", "his", "int"],
+        feat: ["Arcane Spellfury"],
+        powers: {
+          at_will: ["Burning Spray", "Dragonfrost"],
+          encounter: ["Tempest Breath"],
+          daily: ["Lightning Breath"]
+        }
+      }
+    }
+  },
+  "Warden": {
+    defense_bonuses: [1, 0, 1],
+    skill_counts: [1, 3, 0],
+    class_skills: [["nat"], ["ath", "dun", "end", "hea", "int", "per"]],
+    role: "Defender",
+    source: "Primal",
+    armor_proficiencies: ["Cloth", "Leather", "Hide", "Light Shield", "Heavy Shield"],
+    weapon_proficiencies: ["Simple Melee", "Military Melee", "Simple Ranged"],
+    starting_hp: 17,
+    per_level_hp: 7,
+    surges: 9,
+    kits: {
+      "Earth Warden": {
+        permutation: {str: 0, con: 1, wis: 2, int: 3, dex: 4, cha: 5},
+        option: "Earthstrength",
+        skills: ["nat", "ath", "hea", "per"],
+        feat: ["Crushing Earthstrength"],
+        powers: {
+          at_will: ["Earth Shield Strike", "Strength of Stone"],
+          encounter: ["Thunder Ran Assault"],
+          daily: ["Form of the Willow Sentinel"]
+        }
+      },
+      "Wild Warden": {
+        permutation: {str: 0, wis: 1, con: 2, int: 3, dex: 4, cha: 5},
+        option: "Wildblood",
+        skills: ["nat", "ath", "int", "per"],
+        feat: ["Wildblood Cunning"],
+        powers: {
+          at_will: ["Thorn Strike", "Weight of Earth"],
+          encounter: ["Wildblood Frenzy"],
+          daily: ["Form of the Relentless Panther"]
+        }
+      }
+    }
+  }
+};
+
+SKILLS = {
+  acr: {long: "Acrobatics",    ability: "dex"},
+  arc: {long: "Arcana",        ability: "int"},
+  ath: {long: "Athletics",     ability: "str"},
+  blu: {long: "Bluff",         ability: "cha"},
+  dip: {long: "Diplomacy",     ability: "cha"},
+  dun: {long: "Dungeoneering", ability: "wis"},
+  end: {long: "Endurance",     ability: "con"},
+  hea: {long: "Heal",          ability: "wis"},
+  his: {long: "History",       ability: "int"},
+  ins: {long: "Insight",       ability: "wis"},
+  int: {long: "Intimidate",    ability: "cha"},
+  nat: {long: "Nature",        ability: "wis"},
+  per: {long: "Perception",    ability: "wis"},
+  rel: {long: "Religion",      ability: "int"},
+  ste: {long: "Stealth",       ability: "dex"},
+  str: {long: "Streetwise",    ability: "cha"},
+  thi: {long: "Thievery",      ability: "dex"}
+};
+
+SKILL_GROUP_NAMES = [
+  "Primary class skills",
+  "Class skills",
+  "Non-class skills"
+];
+
+DEITIES = {
+  "Avandra": "Good",
+  "Bahamut": "Lawful Good",
+  "Corellon": "Unaligned",
+  "Erathis": "Unaligned",
+  "Ioun": "Unaligned",
+  "Kord": "Unaligned",
+  "Melora": "Unaligned",
+  "Moradin": "Lawful Good",
+  "Pelor": "Good",
+  "The Raven Queen": "Unaligned",
+  "Sehanine": "Unaligned",
+  "Asmodeus": "Evil",
+  "Bane": "Evil",
+  "Gruumsh": "Chaotic Evil",
+  "Lolth": "Chaotic Evil",
+  "Tiamat": "Evil",
+  "Torog": "Evil",
+  "Vecna": "Evil",
+  "Zehir": "Evil"
+};
+
+ABILITY_ORDER = ["str", "con", "dex", "int", "wis", "cha"];
+DEFENSE_ORDER = ["fort", "ref", "will", "ac"];
+DEFAULT_LOADOUT = [16, 14, 13, 12, 11, 10];
+/*
+FEATS = {
+  "Action Surge": {
+    category: "Human", 
+    requirements: feat_reqs("Human")
+  },
+  "Agile Hunter": {
+    category: "Ranger", 
+    requirements: feat_reqs("Dex 15", "Ranger", "Hunter's Quarry")
+  },
+  "Alertness": {
+    category: "Speed", 
+    requirements: feat_reqs()
+  },
+  "Armor of Bahamut": {
+    category: "Channel Divinity", 
+    requirements: feat_reqs("Channel Divinity", "Bahamut")
+  },
+  "Armor Proficiency (Chainmail)": {
+    category: "Armor", 
+    requirements: feat_reqs("Str 13", "Con 13", ["Armor Proficiency (Hide)", "Armor Proficiency (Leather)"])
+  },
+  "Armor Proficiency (Leather)": {
+    category: "Armor", 
+    requirements: feat_reqs()
+  },
+  "Armor Proficiency (Hide)": {
+    category: "Armor",
+    requirements: feat_reqs("Str 13", "Con 13", "Armor Proficiency (Leather)")
+  },
+  "Armor Proficiency (Plate)": {
+    category: "Armor", 
+    requirements: feat_reqs("Str 15", "Con 15", "Armor Proficiency (Scale)")
+  },
+  "Armor Proficiency (Scale)": {
+    category: "Armor", 
+    requirements: feat_reqs("Str 13", "Con 13", "Armor Proficiency (Chainmail)")
+  },
+  "Astral Fire": {
+    category: "Elemental",
+    requirements: feat_reqs("Dex 13", "Cha 13")
+  },
+  "Avandra's Rescue": {
+    category: "Channel Divinity",
+    requirements: feat_reqs("Channel Divinity", "Avandra")
+  },
+  "Backstabber": {
+    category: "Rogue",
+    requirements: feat_reqs("Rogue", "Sneak Attack")
+  },
+  "Blade Opportunist": {
+    category: "Weapon",
+    requirements: feat_reqs("Str 13", "Dex 13")
+  },
+  "Burning Blizzard": {
+    category: "Elemental",
+    requirements: feat_reqs("Int 13", "Wis 13")
+  },
+  "Combat Reflexes": {
+    category: "Speed",
+    requirements: feat_reqs("Dex 13")
+  },
+  "Corellon's Grace": {
+    category: "Channel Divinity",
+    requirements: feat_reqs("Channel Divinity", "Corellon")
+  },
+  "Dark Fury": {
+    category: "Elemental",
+    requirements: feat_reqs("Con 13", "Wis 13")
+  },
+  "Defensive Mobility": {
+    category: "Movement",
+    requirements: feat_reqs()
+  },
+  "Distracting Shield": {
+    category: "Fighter",
+    requirements: feat_reqs("Wis 15", "Fighter", "Combat Challenge")
+  },
+  "Dodge Giants": {
+    category: "Dwarf",
+    requirements: feat_reqs("Dwarf")
+  },
+  "Dragonborn Frenzy": {
+    category: "Dragonborn",
+    requirements: feat_reqs("Dragonborn")
+  },
+  "Dragonborn Senses": {
+    category: "Dragonborn",
+    requirements: feat_reqs("Dragonborn")
+  },
+  "Durable": {
+    category: "Health",
+    requirements: feat_reqs()
+  },
+  "Dwarven Weapon Training": {
+    category: "Dwarf",
+    requirements: feat_reqs("Dwarf")
+  },
+  "Eladrin Soldier": {
+    category: "Eladrin",
+    requirements: feat_reqs("Eladrin")
+  }
+};
+*/
+
+/* Generates all the possible loadouts for ability scores.
+ * It uses the greedy algorithm to find loadouts that spend all the points.  There's about 130 of
+ * them.  
+ */
+function generate_ability_loadouts() {
+  var loadouts = [];
+  var POINTS = [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3, 4, 5, 7, 9, 11, 14, 18]; // padded with 0s to make score-cost relationship obvious.
+  var MINIMA = [14,11,10,10,10,8];
+  var MAXIMA = [18,16,15,14,13,13];
+  var scores = MINIMA.slice();
+  var i = 0;
+  while (true) {
+    i += 1
+    if (i != MINIMA.length) {
+      scores[i] = MINIMA[i];
+    } else {
+      var total_points = 0;
+      for (var k = 0; k < MINIMA.length; k++) {
+        total_points += POINTS[scores[k]];
+      }
+      if (total_points == 32) {
+        loadouts.push(scores.slice());
+      }
+      i -= 1;
+      while (i >= 0 && scores[i] == Math.min(MAXIMA[i], i > 0 ? scores[i-1] : 18)) {
+        i -= 1; // back up until we find a score we can increase.
+      }
+      if (i < 0) {
+        break;
+      } else {
+        scores[i] += 1;
+      }
+    }
+  }
+  return loadouts;
+}
+
+ABILITY_LOADOUTS = generate_ability_loadouts();
+
+function add_td(row, options) { // utility
+  row.append($("<td>", options));
+}
+
+function array_contains(ary, needle) {
+  if (!ary) return false;
+  for (var k = 0; k < ary.length; k += 1) {
+    if (ary[k] == needle) return true;
+  }
+  return false;
+}
+
+function array_max(ary) {
+  if (!ary) return;
+  a = ary[0];
+  for (var k = 1; k < ary.length; k += 1) {
+    a = Math.max(a, ary[k]);
+  }
+  return a;
+}
+
+function array_compare(first, second) {
+  if (first.length != second.length) return false;
+  for (var k = 0; k < first.length; k += 1) {
+    if (first[k] !== second[k]) return false;
+  }
+  return true;
+}
+
+function bonus_string(n) {
+  return (n > 0 ? "+" : "") + String(n);
+}
+
+function build_races_dropdown() { // setup
+  var race_names = Object.keys(RACES);
+  race_names.sort();
+  var dropdown = $("#race_dropdown");
+  dropdown.change(control_race);
+  for (var k = 0; k < race_names.length; k += 1) {
+    var race = race_names[k];
+    var opt = $("<option>", {id: race, value: race, text: race});
+    dropdown.append(opt);
+  }
+}
+
+function build_classes_dropdown() { // setup
+  var class_names = Object.keys(CLASSES);
+  class_names.sort();
+  var dropdown = $("#class_dropdown");
+  dropdown.change(control_class);
+  for (var k = 0; k < class_names.length; k += 1) {
+    var class_ = class_names[k];
+    full_class_description = class_ + " - " + CLASSES[class_].source + " " + CLASSES[class_].role 
+    var opt = $("<option>", {id: class_, value: class_, text: full_class_description});
+    dropdown.append(opt);
+  }
+}
+
+function build_abilities_dropdown() { // setup
+  var default_text = DEFAULT_LOADOUT.join(", ");
+  var dropdown = $("#ability_dropdown");
+  dropdown.change(control_ability_loadout);
+  for (var k = 0; k < ABILITY_LOADOUTS.length; k++) {
+    var attrs = {id: "loadout_" + String(k), value: k, text: ABILITY_LOADOUTS[k].join(", ")};
+    if (attrs.text == default_text) {
+      attrs.text += " ***";
+      attrs.selected = "selected";
+    }
+    var opt = $("<option>", attrs);
+    dropdown.append(opt);
+  }
+}
+
+function build_abilities_grid() { // setup
+  var table = $("#ability_grid");
+  var row = $("<tr>");
+  table.append(row);
+  add_td(row, {text: "Ability"});
+  add_td(row, {text: "Race Bonus"});
+  for (var k = 0; k < ABILITY_ORDER.length; k++) {
+    add_td(row, {id: "ability_" + k});
+  }
+  add_td(row, {text: "Score"});
+  add_td(row, {text: "Bonus"});
+  add_td(row, {text: "Defenses (naked)", colSpan: 2});
+  for (var k = 0; k < ABILITY_ORDER.length; k++) {
+    var abil = ABILITY_ORDER[k];
+    row = $("<tr>");
+    table.append(row);
+    add_td(row, {text: ABILITY_SCORES[abil].long});
+    add_td(row, {id: abil + "_race_bonus"}); 
+    for (var j = 0; j < ABILITY_ORDER.length; j++) {
+      var cell = $("<td>");
+      row.append(cell);
+      cell.append($("<input>", {
+        type: "radio", 
+        name: abil, 
+        id: abil + "_" + j, 
+        value: j, 
+        click: control_ability_permutation
+      }));
+    }
+    add_td(row, {id: abil + "_score"});
+    add_td(row, {id: abil + "_bonus"});
+    if (k % 2 == 0) {
+      add_td(row, {text: DEFENSES[DEFENSE_ORDER[k/2]].long, rowSpan: 2});
+      add_td(row, {id: DEFENSE_ORDER[k/2], rowSpan: 2});
+    }
+  }
+}
+
+function create_skill_dropdowns() { // view
+  var dropdown_count = player.skill_selections.length;
+  var skill_freedom = detect_skill_freedom();  
+  var container = $("#skill_dropdowns");
+  for (var dd = 0; dd < dropdown_count; dd += 1) {
+    var dropdown_div = $("<p>", {id: "skill_div_" + String(dd)});
+    var dropdown = $("<select>", {id: "skill_dropdown_" + String(dd), name: "skill_dropdown_" + String(dd), change: control_skill_selection});
+    dropdown_div.append(dropdown);
+    container.append(dropdown_div);
+    for (var cat = 0; cat < player.internal_class_skill_lists.length; cat += 1) {
+      if (player.internal_class_skill_lists[cat].length == 0) continue; // skip making empty categories.
+      var category = $("<optgroup>", {label: SKILL_GROUP_NAMES[cat]});
+      if (skill_freedom[dd] < cat) category.attr("disabled", "disabled");
+      dropdown.append(category);
+      for (var sk = 0; sk < player.internal_class_skill_lists[cat].length; sk += 1) {
+        var skill_id = player.internal_class_skill_lists[cat][sk];
+        var skill_item = $("<option>", {id: "skill_dropdown_" + String(dd) + "_" + skill_id, value: skill_id, text: SKILLS[skill_id].long});
+        category.append(skill_item);
+        if (player.skill_selections[dd] == skill_id) {
+          skill_item.attr("selected", "selected");
+        } else if (player.skill_selections[dd] != skill_id && array_contains(player.skill_selections, skill_id)) {
+          skill_item.attr("disabled", "disabled");
+        }
+      }
+    }
+  }
+}
+
+function build_skills_grid() { // view
+  var table = $("#skills_grid");
+  var row = $("<tr>");
+  add_td(row, {text: "Skill"});
+  add_td(row, {text: "Bonus"});
+  add_td(row, {text: "Ability", colSpan: 2});
+  add_td(row, {text: "Trained"});
+  add_td(row, {text: "Armor"});
+  add_td(row, {text: "Misc"});
+  table.append(row);
+  var skill_ids = Object.keys(SKILLS);
+  skill_ids.sort();
+  for (var k = 0; k < skill_ids.length; k++) {
+    var skill_id = skill_ids[k];
+    row = $("<tr>");
+    table.append(row);
+    add_td(row, {text: SKILLS[skill_id].long});
+    add_td(row, {id: skill_id + "_skill_bonus"});
+    add_td(row, {text: ABILITY_SCORES[SKILLS[skill_id].ability].short});
+    add_td(row, {id: skill_id + "_skill_ability"});
+    add_td(row, {id: skill_id + "_skill_trained"});
+    add_td(row, {id: skill_id + "_skill_armor"});
+    add_td(row, {id: skill_id + "_skill_misc"});
+  }
+}
+
+function control_skill_selection() {
+  var index = Number(this.id.slice(15)); // :(
+  player.select_skill(index, $(this).val());
+}
+
+function control_class() {
+  player.select_class($(this).val());
+}
+
+function control_race() {
+  player.select_race($(this).val());
+}
+
+function control_ability_loadout() {
+  index = Number(this.value);
+  loadout = ABILITY_LOADOUTS[index];
+  player.select_ability_loadout(loadout); 
+}
+
+function control_ability_permutation() {
+  player.change_ability_permutation(this.name, Number(this.value));
+}
+
+function control_human_ability_selection() { 
+  player.update_human_ability_selection(this.value);
+}
+
+function control_apply_kit() {
+  player.apply_kit(this.value);
+};
+
+function setup() {
+  build_races_dropdown();
+  build_classes_dropdown();
+  build_abilities_dropdown();
+  build_abilities_grid();
+  build_skills_grid();
+  player = new Character;
+  player.view = view; 
+  player.force("Fighter", "Dwarf", DEFAULT_LOADOUT, {str: 0, con: 1, dex: 2, int: 5, wis: 3, cha: 4}, ["ath", "end", "int"]);
+}
+
+setup();  
+    </script>
+  </body>
+</html>
