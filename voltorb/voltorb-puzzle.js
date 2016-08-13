@@ -123,7 +123,9 @@ function filter_by_cell(boards, row, col, val) {
 }
 
 function fill_stats(stats) {
-
+	$('.found').removeClass('found').removeClass('found-0').removeClass('found-1').removeClass('found-2').removeClass('found-3');
+	$('.impossible').removeClass('impossible');
+	$('.safe').removeClass('safe');
 	var lowest_risk = 1;
 	for (var k = 0; k < 5; k++) {
 		for (var j = 0; j < 5; j++) {
@@ -133,6 +135,8 @@ function fill_stats(stats) {
 				if (stat == 1) {
 					$(`#cell-${k}-${j}`).addClass('found').addClass(`found-${i}`);
 					found = true;
+				} else if (stat == 0) {
+					$(`#button-${k}-${j}-${i}`).addClass('impossible');
 				}
 				var stat_string = stat.toFixed(3);
 				$(`#p-${k}-${j}-${i}`).text(stat_string);
