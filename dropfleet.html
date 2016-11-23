@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>Dropfleet Commander: Bombing Runs vs Fighters</title>
+		<script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.1.1/jquery.min.js"></script>
+		<script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/2.4.0/Chart.min.js"></script>
+		<script type="text/javascript">
+			$(function() {
+				$('#execute').click(do_the_math);
+				myChart = null;
+			})
+
+			function do_the_math(ev) {
+				inputs = collect_data();
+				results = calculate(inputs);
+				display_results(results);
+
+			}
+
+			function collect_data() {
+				var VARIABLE_NAMES = [
+					'bomber_threshold',
+					'bombers_launched',
+					'fighter_strength',
+					'fighters_launched',
+					'cap_ship_pds',
+					'cap_ship_armor'
+				];
+
+				var inputs = {};
+
+				for (var k = 0; k < VARIABLE_NAMES.length; k++) {
+					inputs[VARIABLE_NAMES[k]] = Number($('#' + VARIABLE_NAMES[k]).val())
+				}
+
+				return inputs;
+			}
+
+			function calculate(inputs) {
+
+				// I never need to launch more fighters than my opponent has.
+				var maximal_attacking_fighters = Math.min(inputs.bombers_launched - 1, inputs.fighters_launched);
+				var bomber_miss_chance = (inputs.bomber_threshold - 1) / 6;
+				var bomber_hit_chance = 1/3;
+				var bomber_crit_chance = (5 - inputs.bomber_threshold) / 6;
+				var beat_armor_probability = (inputs.cap_ship_armor - 1) / 6;
+
+				console.log(bomber_miss_chance, bomber_hit_chance, bomber_crit_chance);
+
+				var damage_curves = [];
+
+				for (var attack_fighters = 0; attack_fighters <= maximal_attacking_fighters; attack_fighters++) {
+
+					var bomber_squadrons = inputs.bombers_launched - attack_fighters;
+
+					var damage_dealt = new Array(inputs.bombers_launched * 2 + 1).fill(0);
+
+					var effective_fighters = inputs.fighters_launched - attack_fighters;
+					var bomber_dice = bomber_squadrons * 2;
+					var pds_dice = inputs.cap_ship_pds + effective_fighters * inputs.fighter_strength;
+
+					for (var bomber_hits = 0; bomber_hits <= bomber_dice; bomber_hits++) {
+						for (var bomber_crits = 0; bomber_crits <= bomber_dice - bomber_hits; bomber_crits++) {
+							var bomber_misses = bomber_dice - bomber_hits - bomber_crits;
+							var bomber_attack_piles = [
+								[bomber_misses, bomber_miss_chance],
+								[bomber_hits, bomber_hit_chance],
+								[bomber_crits, bomber_crit_chance]
+							];
+							var this_attack_probability = multinomial_distribution(bomber_attack_piles);
+							for (var pds_hits = 0; pds_hits <= pds_dice; pds_hits++) {
+								var this_defense_probability = binomial_distribution(pds_dice, 1/3, pds_hits);
+
+								if (beat_armor_probability > 1/2) {
+									// The defender should deal with regular hits first and criticals second
+									var regular_hits_negated = Math.min(pds_hits, bomber_hits);
+									var pds_remaining_after_regular_hits = pds_hits - regular_hits_negated;
+									var crits_negated = Math.floor(pds_remaining_after_regular_hits / 2);
+									var final_armor_hits = bomber_hits - regular_hits_negated;
+									var final_crits = Math.max(0, bomber_crits - crits_negated);
+								} else {
+									// the defender should deal with criticals first and regular hits second
+									var crits_negated = Math.min(bomber_crits, Math.floor(pds_hits / 2));
+									var pds_remaining_after_crits = pds_hits - crits_negated * 2;
+									var regular_hits_negated = Math.min(bomber_hits, pds_remaining_after_crits);
+									var final_crits = bomber_crits - crits_negated;
+									var final_armor_hits = bomber_hits - regular_hits_negated;
+								}
+
+								for (var armor_saves = 0; armor_saves <= final_armor_hits; armor_saves++) {
+									var this_armor_probability = binomial_distribution(final_armor_hits, beat_armor_probability, armor_saves);
+									var final_damage = final_crits + final_armor_hits - armor_saves;
+									damage_dealt[final_damage] += this_attack_probability * this_defense_probability * this_armor_probability;
+//									console.log(`Fighters: ${attack_fighters}  Bombers: ${bomber_squadrons}  Hits: ${bomber_hits}  Crits: ${bomber_crits}  PDS: ${pds_hits}  Final Hits: ${final_armor_hits}  Final Crits: ${final_crits}  Saves: ${armor_saves}  Damage: ${final_damage}  Attack Probability: ${this_attack_probability}  Defense Probability: ${this_defense_probability}  Armor probability: ${this_armor_probability}`);
+								}
+
+							}
+						}
+					}
+
+					damage_curves.push(damage_dealt);
+				}
+				return damage_curves;
+			}
+
+			function display_results(results) {
+				var ctx = $("#chart");
+
+				var expected_damage = 0;
+				var optimal_fighters = -1;
+
+				for (var fighter_count = 0; fighter_count < results.length; fighter_count++) {
+					var damage_curve = results[fighter_count];
+					var current_expected_damage = 0
+					for (var damage_amount = 0; damage_amount < damage_curve.length; damage_amount++) {
+						current_expected_damage += damage_amount * damage_curve[damage_amount];
+					}
+					if (current_expected_damage > expected_damage) {
+						expected_damage = current_expected_damage;
+						optimal_fighters = fighter_count;
+					}
+				}
+
+				var datasets = [];
+				for (var fighter_count = 0; fighter_count < results.length; fighter_count++) {
+
+					datasets.push({
+						'data': results[fighter_count],
+						'label': fighter_count + ' fighters', 
+						'borderColor': (fighter_count == optimal_fighters) ? 'rgba(0,0,0,1)' : 'rgba(0,0,0,0.25)',
+						'lineTension': 0,
+						'backgroundColor': 'rgba(0,0,0,0)'
+					});
+				}
+
+				var labels = [];
+				for (var label = 0; label < results[0].length; label++) {
+					labels.push(label)
+				}
+
+				var chart_data = {
+					'type': 'line',
+					'data': {'datasets': datasets, 'labels': labels},
+					'options': {
+						'legend': {'display': false}
+					}
+				}
+				if (myChart) {myChart.destroy();}
+				myChart = new Chart(ctx, chart_data);
+			}
+
+			function binomial_coefficient(n,k) {
+				if (k * 2 > n) { k = n - k; }
+				if (k < 0) { return 0; }
+				var result = 1;
+				for (var j = 1; j <= k; j++) {
+					result = result * (n + 1 - j) / j;
+				}
+				return result;
+			}
+
+			function binomial_distribution(n,p,k) {
+				var q = 1-p;
+				return binomial_coefficient(n,k) * Math.pow(p,k) * Math.pow(q, n-k);
+
+			}
+
+			function multinomial_distribution(piles) {
+				var accumulator = 1;
+				var result = 1;
+				for (var k = 0; k < piles.length; k++) {
+					var pile_count = piles[k][0];
+					var pile_probability = piles[k][1];
+					for (var j = 1; j <= pile_count; j++) {
+						result = result * pile_probability * accumulator / j;
+						accumulator++;
+					}
+				}
+				return result;
+			}
+
+
+		</script>
+	</head>
+	<body>
+		<form id="form">
+			<p>Bomber accuracy
+				<input type="number" id="bomber_threshold" value="3" min="2" max="4">
+			</p>
+			<p>Attacker squadrons launched
+				<input type="number" id="bombers_launched" value="15" min="0" max="15">
+			</p>
+			<p>Fighter point defense strength
+				<input type="number" id="fighter_strength" value="3" min="3" max="5">
+			</p>
+			<p>Defender fighters launched
+				<input type="number" id="fighters_launched" value="15" min="0" max="15">
+			</p>
+			<p>Capital ship point defense strength
+				<input type="number" id="cap_ship_pds" value="4" min="2" max="7">
+			</p>
+			<p>Capital ship armor strength
+				<input type="number" id="cap_ship_armor" value="4" min="3" max="5">
+			</p>
+			<button type="button" id="execute">Execute</button>
+		</form>
+		<canvas id="chart" width="100%" height="50vh">
+	</body>
+</html>
