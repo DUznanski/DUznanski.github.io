@@ -1,0 +1,47 @@
+body {
+    font-family: verdana; 
+}
+
+tbody th {
+    font-weight: normal
+}
+
+td {
+    text-align: center;
+}
+
+td.good {
+    background: #cfc;
+}
+
+td.bad {
+    background: #fcc;
+}
+
+td.na {
+    background: #eee;
+}
+
+td.ok {
+    background: #ffc;
+}
+
+tr:hover {
+    background: #eee;
+}
+
+tr:hover td.good {
+    background: #beb;
+}
+
+tr:hover td.bad {
+    background: #ebb;
+}
+
+tr:hover td.ok {
+    background: #eeb;
+}
+
+tr:hover td.na {
+    background: #ddd;
+}
